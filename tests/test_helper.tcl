@@ -1,5 +1,5 @@
 # Redis test suite. Copyright (C) 2009 Salvatore Sanfilippo antirez@gmail.com
-# This softare is released under the BSD License. See the COPYING file for
+# This software is released under the BSD License. See the COPYING file for
 # more information.
 
 package require Tcl 8.5
@@ -16,34 +16,52 @@ set ::all_tests {
     unit/dump
     unit/auth
     unit/protocol
-    unit/basic
+    unit/keyspace
+    unit/scan
+    unit/type/string
+    unit/type/incr
     unit/type/list
     unit/type/list-2
     unit/type/list-3
     unit/type/set
     unit/type/zset
     unit/type/hash
+    unit/type/stream
+    unit/type/stream-cgroups
     unit/sort
     unit/expire
     unit/other
     unit/multi
     unit/quit
     unit/aofrw
+    integration/block-repl
     integration/replication
     integration/replication-2
     integration/replication-3
     integration/replication-4
+    integration/replication-psync
     integration/aof
     integration/rdb
     integration/convert-zipmap-hash-on-load
+    integration/logging
+    integration/psync2
+    integration/psync2-reg
     unit/pubsub
     unit/slowlog
     unit/scripting
     unit/maxmemory
     unit/introspection
+    unit/introspection-2
     unit/limits
     unit/obuf-limits
     unit/bitops
+    unit/bitfield
+    unit/geo
+    unit/memefficiency
+    unit/hyperloglog
+    unit/lazyfree
+    unit/wait
+    unit/pendingquerybuf
 }
 # Index to the next test to run in the ::all_tests list.
 set ::next_test 0
@@ -52,15 +70,27 @@ set ::host 127.0.0.1
 set ::port 21111
 set ::traceleaks 0
 set ::valgrind 0
+set ::stack_logging 0
 set ::verbose 0
 set ::quiet 0
 set ::denytags {}
+set ::skiptests {}
 set ::allowtags {}
+set ::only_tests {}
+set ::single_tests {}
+set ::skip_till ""
 set ::external 0; # If "1" this means, we are running against external instance
 set ::file ""; # If set, runs only the tests in this comma separated list
 set ::curfile ""; # Hold the filename of the current suite
 set ::accurate 0; # If true runs fuzz tests with more iterations
 set ::force_failure 0
+set ::timeout 600; # 10 minutes without progresses will quit the test.
+set ::last_progress [clock seconds]
+set ::active_servers {} ; # Pids of active Redis instances.
+set ::dont_clean 0
+set ::wait_server 0
+set ::stop_on_failure 0
+set ::loop 0
 
 # Set to 1 when we are running in client mode. The Redis test uses a
 # server-client model to run tests simultaneously. The server instance
@@ -154,26 +184,14 @@ proc s {args} {
 }
 
 proc cleanup {} {
+    if {$::dont_clean} {
+        return
+    }
     if {!$::quiet} {puts -nonewline "Cleanup: may take some time... "}
     flush stdout
     catch {exec rm -rf {*}[glob tests/tmp/redis.conf.*]}
     catch {exec rm -rf {*}[glob tests/tmp/server.*]}
     if {!$::quiet} {puts "OK"}
-}
-
-proc find_available_port start {
-    for {set j $start} {$j < $start+1024} {incr j} {
-        if {[catch {
-            set fd [socket 127.0.0.1 $j]
-        }]} {
-            return $j
-        } else {
-            close $fd
-        }
-    }
-    if {$j == $start+1024} {
-        error "Can't find a non busy port in the $start-[expr {$start+1023}] range."
-    }
 }
 
 proc test_server_main {} {
@@ -185,7 +203,7 @@ proc test_server_main {} {
     if {!$::quiet} {
         puts "Starting test server at port $port"
     }
-    socket -server accept_test_clients $port
+    socket -server accept_test_clients -myaddr 127.0.0.1 $port
 
     # Start the client instances
     set ::clients_pids {}
@@ -201,6 +219,7 @@ proc test_server_main {} {
     # Setup global state for the test server
     set ::idle_clients {}
     set ::active_clients {}
+    array set ::active_clients_task {}
     array set ::clients_start_time {}
     set ::clients_time_history {}
     set ::failed_tests {}
@@ -210,13 +229,25 @@ proc test_server_main {} {
     vwait forever
 }
 
-# This function gets called 10 times per second, for now does nothing but
-# may be used in the future in order to detect test clients taking too much
-# time to execute the task.
+# This function gets called 10 times per second.
 proc test_server_cron {} {
+    set elapsed [expr {[clock seconds]-$::last_progress}]
+
+    if {$elapsed > $::timeout} {
+        set err "\[[colorstr red TIMEOUT]\]: clients state report follows."
+        puts $err
+        lappend ::failed_tests $err
+        show_clients_state
+        kill_clients
+        force_kill_all_servers
+        the_end
+    }
+
+    after 100 test_server_cron
 }
 
 proc accept_test_clients {fd addr port} {
+    fconfigure $fd -encoding binary
     fileevent $fd readable [list read_from_test_client $fd]
 }
 
@@ -230,6 +261,8 @@ proc accept_test_clients {fd addr port} {
 # testing: just used to signal that a given test started.
 # ok: a test was executed with success.
 # err: a test was executed with an error.
+# skip: a test was skipped by skipfile or individual test options.
+# ignore: a test was skipped by a group tag.
 # exception: there was a runtime exception while executing the test.
 # done: all the specified test file was processed, this test client is
 #       ready to accept a new task.
@@ -237,6 +270,8 @@ proc read_from_test_client fd {
     set bytes [gets $fd]
     set payload [read $fd $bytes]
     foreach {status data} $payload break
+    set ::last_progress [clock seconds]
+
     if {$status eq {ready}} {
         if {!$::quiet} {
             puts "\[$status\]: $data"
@@ -250,26 +285,70 @@ proc read_from_test_client fd {
         puts "\[$completed_tests_count/$all_tests_count [colorstr yellow $status]\]: $data ($elapsed seconds)"
         lappend ::clients_time_history $elapsed $data
         signal_idle_client $fd
+        set ::active_clients_task($fd) DONE
     } elseif {$status eq {ok}} {
         if {!$::quiet} {
             puts "\[[colorstr green $status]\]: $data"
+        }
+        set ::active_clients_task($fd) "(OK) $data"
+    } elseif {$status eq {skip}} {
+        if {!$::quiet} {
+            puts "\[[colorstr yellow $status]\]: $data"
+        }
+    } elseif {$status eq {ignore}} {
+        if {!$::quiet} {
+            puts "\[[colorstr cyan $status]\]: $data"
         }
     } elseif {$status eq {err}} {
         set err "\[[colorstr red $status]\]: $data"
         puts $err
         lappend ::failed_tests $err
+        set ::active_clients_task($fd) "(ERR) $data"
+            if {$::stop_on_failure} {
+            puts -nonewline "(Test stopped, press enter to continue)"
+            flush stdout
+            gets stdin
+        }
     } elseif {$status eq {exception}} {
         puts "\[[colorstr red $status]\]: $data"
-        foreach p $::clients_pids {
-            catch {exec kill -9 $p}
-        }
+        kill_clients
+        force_kill_all_servers
         exit 1
     } elseif {$status eq {testing}} {
-        # No op
+        set ::active_clients_task($fd) "(IN PROGRESS) $data"
+    } elseif {$status eq {server-spawned}} {
+        lappend ::active_servers $data
+    } elseif {$status eq {server-killed}} {
+        set ::active_servers [lsearch -all -inline -not -exact $::active_servers $data]
     } else {
         if {!$::quiet} {
             puts "\[$status\]: $data"
         }
+    }
+}
+
+proc show_clients_state {} {
+    # The following loop is only useful for debugging tests that may
+    # enter an infinite loop. Commented out normally.
+    foreach x $::active_clients {
+        if {[info exist ::active_clients_task($x)]} {
+            puts "$x => $::active_clients_task($x)"
+        } else {
+            puts "$x => ???"
+        }
+    }
+}
+
+proc kill_clients {} {
+    foreach p $::clients_pids {
+        catch {exec kill $p}
+    }
+}
+
+proc force_kill_all_servers {} {
+    foreach p $::active_servers {
+        puts "Killing still running Redis server $p"
+        catch {exec kill -9 $p}
     }
 }
 
@@ -279,15 +358,22 @@ proc signal_idle_client fd {
     # Remove this fd from the list of active clients.
     set ::active_clients \
         [lsearch -all -inline -not -exact $::active_clients $fd]
+
+    if 0 {show_clients_state}
+
     # New unit to process?
     if {$::next_test != [llength $::all_tests]} {
         if {!$::quiet} {
             puts [colorstr bold-white "Testing [lindex $::all_tests $::next_test]"]
+            set ::active_clients_task($fd) "ASSIGNED: $fd ([lindex $::all_tests $::next_test])"
         }
         set ::clients_start_time($fd) [clock seconds]
         send_data_packet $fd run [lindex $::all_tests $::next_test]
         lappend ::active_clients $fd
         incr ::next_test
+        if {$::loop && $::next_test == [llength $::all_tests]} {
+            set ::next_test 0
+        }
     } else {
         lappend ::idle_clients $fd
         if {[llength $::active_clients] == 0} {
@@ -296,7 +382,7 @@ proc signal_idle_client fd {
     }
 }
 
-# The the_end funciton gets called when all the test units were already
+# The the_end function gets called when all the test units were already
 # executed, so the test finished.
 proc the_end {} {
     # TODO: print the status, exit with the rigth exit code.
@@ -323,6 +409,7 @@ proc the_end {} {
 # to read the command, execute, reply... all this in a loop.
 proc test_client_main server_port {
     set ::test_server_fd [socket localhost $server_port]
+    fconfigure $::test_server_fd -encoding binary
     send_data_packet $::test_server_fd ready [pid]
     while 1 {
         set bytes [gets $::test_server_fd]
@@ -346,12 +433,22 @@ proc send_data_packet {fd status data} {
 proc print_help_screen {} {
     puts [join {
         "--valgrind         Run the test over valgrind."
+        "--stack-logging    Enable OSX leaks/malloc stack logging."
         "--accurate         Run slow randomized tests for more iterations."
         "--quiet            Don't show individual tests."
-        "--single <unit>    Just execute the specified unit (see next option)."
+        "--single <unit>    Just execute the specified unit (see next option). this option can be repeated."
         "--list-tests       List all the available test units."
-        "--clients <num>    Number of test clients (16)."
+        "--only <test>      Just execute the specified test by test name. this option can be repeated."
+        "--skip-till <unit> Skip all units until (and including) the specified one."
+        "--clients <num>    Number of test clients (default 16)."
+        "--timeout <sec>    Test timeout in seconds (default 10 min)."
         "--force-failure    Force the execution of a test that always fails."
+        "--config <k> <v>   Extra config file argument."
+        "--skipfile <file>  Name of a file containing test names that should be skipped (one per line)."
+        "--dont-clean       Don't delete redis log files after the run."
+        "--stop             Blocks once the first test fails."
+        "--loop             Execute the specified set of tests forever."
+        "--wait-server      Wait after server is started (so that you can attach a debugger)."
         "--help             Print this help screen."
     } "\n"]
 }
@@ -369,8 +466,23 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
             }
         }
         incr j
+    } elseif {$opt eq {--config}} {
+        set arg2 [lindex $argv [expr $j+2]]
+        lappend ::global_overrides $arg
+        lappend ::global_overrides $arg2
+        incr j 2
+    } elseif {$opt eq {--skipfile}} {
+        incr j
+        set fp [open $arg r]
+        set file_data [read $fp]
+        close $fp
+        set ::skiptests [split $file_data "\n"]
     } elseif {$opt eq {--valgrind}} {
         set ::valgrind 1
+    } elseif {$opt eq {--stack-logging}} {
+        if {[string match {*Darwin*} [exec uname -a]]} {
+            set ::stack_logging 1
+        }
     } elseif {$opt eq {--quiet}} {
         set ::quiet 1
     } elseif {$opt eq {--host}} {
@@ -385,19 +497,38 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     } elseif {$opt eq {--force-failure}} {
         set ::force_failure 1
     } elseif {$opt eq {--single}} {
-        set ::all_tests $arg
+        lappend ::single_tests $arg
+        incr j
+    } elseif {$opt eq {--only}} {
+        lappend ::only_tests $arg
+        incr j
+    } elseif {$opt eq {--skiptill}} {
+        set ::skip_till $arg
         incr j
     } elseif {$opt eq {--list-tests}} {
         foreach t $::all_tests {
             puts $t
         }
         exit 0
+    } elseif {$opt eq {--verbose}} {
+        set ::verbose 1
     } elseif {$opt eq {--client}} {
         set ::client 1
         set ::test_server_port $arg
         incr j
     } elseif {$opt eq {--clients}} {
         set ::numclients $arg
+        incr j
+    } elseif {$opt eq {--dont-clean}} {
+        set ::dont_clean 1
+    } elseif {$opt eq {--wait-server}} {
+        set ::wait_server 1
+    } elseif {$opt eq {--stop}} {
+        set ::stop_on_failure 1
+    } elseif {$opt eq {--loop}} {
+        set ::loop 1
+    } elseif {$opt eq {--timeout}} {
+        set ::timeout $arg
         incr j
     } elseif {$opt eq {--help}} {
         print_help_screen
@@ -408,10 +539,90 @@ for {set j 0} {$j < [llength $argv]} {incr j} {
     }
 }
 
+# If --skil-till option was given, we populate the list of single tests
+# to run with everything *after* the specified unit.
+if {$::skip_till != ""} {
+    set skipping 1
+    foreach t $::all_tests {
+        if {$skipping == 0} {
+            lappend ::single_tests $t
+        }
+        if {$t == $::skip_till} {
+            set skipping 0
+        }
+    }
+    if {$skipping} {
+        puts "test $::skip_till not found"
+        exit 0
+    }
+}
+
+# Override the list of tests with the specific tests we want to run
+# in case there was some filter, that is --single or --skip-till options.
+if {[llength $::single_tests] > 0} {
+    set ::all_tests $::single_tests
+}
+
+proc attach_to_replication_stream {} {
+    set s [socket [srv 0 "host"] [srv 0 "port"]]
+    fconfigure $s -translation binary
+    puts -nonewline $s "SYNC\r\n"
+    flush $s
+
+    # Get the count
+    while 1 {
+        set count [gets $s]
+        set prefix [string range $count 0 0]
+        if {$prefix ne {}} break; # Newlines are allowed as PINGs.
+    }
+    if {$prefix ne {$}} {
+        error "attach_to_replication_stream error. Received '$count' as count."
+    }
+    set count [string range $count 1 end]
+
+    # Consume the bulk payload
+    while {$count} {
+        set buf [read $s $count]
+        set count [expr {$count-[string length $buf]}]
+    }
+    return $s
+}
+
+proc read_from_replication_stream {s} {
+    fconfigure $s -blocking 0
+    set attempt 0
+    while {[gets $s count] == -1} {
+        if {[incr attempt] == 10} return ""
+        after 100
+    }
+    fconfigure $s -blocking 1
+    set count [string range $count 1 end]
+
+    # Return a list of arguments for the command.
+    set res {}
+    for {set j 0} {$j < $count} {incr j} {
+        read $s 1
+        set arg [::redis::redis_bulk_read $s]
+        if {$j == 0} {set arg [string tolower $arg]}
+        lappend res $arg
+    }
+    return $res
+}
+
+proc assert_replication_stream {s patterns} {
+    for {set j 0} {$j < [llength $patterns]} {incr j} {
+        assert_match [lindex $patterns $j] [read_from_replication_stream $s]
+    }
+}
+
+proc close_replication_stream {s} {
+    close $s
+}
+
 # With the parallel test running multiple Redis instances at the same time
 # we need a fast enough computer, otherwise a lot of tests may generate
 # false positives.
-# If the computer is too slow we revert the sequetial test without any
+# If the computer is too slow we revert the sequential test without any
 # parallelism, that is, clients == 1.
 proc is_a_slow_computer {} {
     set start [clock milliseconds]

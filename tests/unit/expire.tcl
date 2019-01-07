@@ -121,7 +121,7 @@ start_server {tags {"expire"}} {
         list $a $b
     } {somevalue {}}
 
-    test {TTL returns tiem to live in seconds} {
+    test {TTL returns time to live in seconds} {
         r del x
         r setex x 10 somevalue
         set ttl [r ttl x]
@@ -160,6 +160,34 @@ start_server {tags {"expire"}} {
         list $size1 $size2
     } {3 0}
 
+    test {Redis should lazy expire keys} {
+        r flushdb
+        r debug set-active-expire 0
+        r psetex key1 500 a
+        r psetex key2 500 a
+        r psetex key3 500 a
+        set size1 [r dbsize]
+        # Redis expires random keys ten times every second so we are
+        # fairly sure that all the three keys should be evicted after
+        # one second.
+        after 1000
+        set size2 [r dbsize]
+        r mget key1 key2 key3
+        set size3 [r dbsize]
+        r debug set-active-expire 1
+        list $size1 $size2 $size3
+    } {3 3 0}
+
+    test {EXPIRE should not resurrect keys (issue #1026)} {
+        r debug set-active-expire 0
+        r set foo bar
+        r pexpire foo 500
+        after 1000
+        r expire foo 10
+        r debug set-active-expire 1
+        r exists foo
+    } {0}
+
     test {5 keys in, 5 keys out} {
         r flushdb
         r set a c
@@ -170,4 +198,25 @@ start_server {tags {"expire"}} {
         r set foo b
         lsort [r keys *]
     } {a e foo s t}
+
+    test {EXPIRE with empty string as TTL should report an error} {
+        r set foo bar
+        catch {r expire foo ""} e
+        set e
+    } {*not an integer*}
+
+    test {SET - use EX/PX option, TTL should not be reseted after loadaof} {
+        r config set appendonly yes
+        r set foo bar EX 100
+        after 2000
+        r debug loadaof
+        set ttl [r ttl foo]
+        assert {$ttl <= 98 && $ttl > 90}
+
+        r set foo bar PX 100000
+        after 2000
+        r debug loadaof
+        set ttl [r ttl foo]
+        assert {$ttl <= 98 && $ttl > 90}
+    }
 }
