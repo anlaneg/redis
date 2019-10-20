@@ -93,6 +93,7 @@ void setGenericCommand(client *c, int flags, robj *key, robj *val, robj *expire,
 }
 
 /* SET key value [NX] [XX] [EX <seconds>] [PX <milliseconds>] */
+//set命令执行
 void setCommand(client *c) {
     int j;
     robj *expire = NULL;

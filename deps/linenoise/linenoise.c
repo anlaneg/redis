@@ -130,6 +130,7 @@ static int mlmode = 0;  /* Multi line mode. Default is single line. */
 static int atexit_registered = 0; /* Register atexit just 1 time. */
 static int history_max_len = LINENOISE_DEFAULT_HISTORY_MAX_LEN;
 static int history_len = 0;
+//记录历史命令行
 static char **history = NULL;
 
 /* The linenoiseState structure represents the state during line editing.
@@ -765,6 +766,7 @@ void linenoiseEditDeletePrevWord(struct linenoiseState *l) {
  * when ctrl+d is typed.
  *
  * The function returns the length of the current buffer. */
+//读取一行数据，支持简单的shell命令
 static int linenoiseEdit(int stdin_fd, int stdout_fd, char *buf, size_t buflen, const char *prompt)
 {
     struct linenoiseState l;
@@ -1044,6 +1046,7 @@ char *linenoise(const char *prompt) {
          * limit to the line size, so we call a function to handle that. */
         return linenoiseNoTTY();
     } else if (isUnsupportedTerm()) {
+        //不支持的终端
         size_t len;
 
         printf("%s",prompt);
@@ -1097,12 +1100,14 @@ static void linenoiseAtExit(void) {
  * histories, but will work well for a few hundred of entries.
  *
  * Using a circular buffer is smarter, but a bit more complex to handle. */
+//将命令加入到history中
 int linenoiseHistoryAdd(const char *line) {
     char *linecopy;
 
     if (history_max_len == 0) return 0;
 
     /* Initialization on first call. */
+    //初始化历史命令行变量
     if (history == NULL) {
         history = malloc(sizeof(char*)*history_max_len);
         if (history == NULL) return 0;
@@ -1110,17 +1115,20 @@ int linenoiseHistoryAdd(const char *line) {
     }
 
     /* Don't add duplicated lines. */
+    //跳过与上一行重复的命令
     if (history_len && !strcmp(history[history_len-1], line)) return 0;
 
     /* Add an heap allocated copy of the line in the history.
      * If we reached the max length, remove the older line. */
     linecopy = strdup(line);
     if (!linecopy) return 0;
+    //达到命令行最大数，移除第一条，并执行memmove(这里搞成环形队列好一些，省memmove)
     if (history_len == history_max_len) {
         free(history[0]);
         memmove(history,history+1,sizeof(char*)*(history_max_len-1));
         history_len--;
     }
+    //将历史命令存入
     history[history_len] = linecopy;
     history_len++;
     return 1;
@@ -1180,6 +1188,7 @@ int linenoiseHistorySave(const char *filename) {
  *
  * If the file exists and the operation succeeded 0 is returned, otherwise
  * on error -1 is returned. */
+//加载filename中的命令，将其加入到history中
 int linenoiseHistoryLoad(const char *filename) {
     FILE *fp = fopen(filename,"r");
     char buf[LINENOISE_MAX_LINE];

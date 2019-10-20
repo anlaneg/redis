@@ -451,6 +451,7 @@ int anetWrite(int fd, char *buf, int count)
     return totlen;
 }
 
+//绑定地址并监听
 static int anetListen(char *err, int s, struct sockaddr *sa, socklen_t len, int backlog) {
     if (bind(s,sa,len) == -1) {
         anetSetError(err, "bind: %s", strerror(errno));

@@ -317,18 +317,21 @@ static sds getDotfilePath(char *envoverride, char *dotfilename) {
     path = getenv(envoverride);
     if (path != NULL && *path != '\0') {
         if (!strcmp("/dev/null", path)) {
+            //强制指定为/dev/null，直接返回NULL
             return NULL;
         }
 
         /* If the env is set, return it. */
         dotPath = sdsnew(path);
     } else {
+        //环境变量未指定路径，使用home路径
         char *home = getenv("HOME");
         if (home != NULL && *home != '\0') {
             /* If no override is set use $HOME/<dotfilename>. */
             dotPath = sdscatprintf(sdsempty(), "%s/%s", home, dotfilename);
         }
     }
+    //返回指定路径下的dotfilename文件地址
     return dotPath;
 }
 
@@ -1260,6 +1263,7 @@ static int cliReadReply(int output_raw_strings) {
 }
 
 static int cliSendCommand(int argc, char **argv, long repeat) {
+    //取首个参数做为command
     char *command = argv[0];
     size_t *argvlen;
     int j, output_raw;
@@ -1845,6 +1849,7 @@ static sds *cliSplitArgs(char *line, int *argc) {
         argv[1] = sdsnewlen(line+elen,len-elen);
         return argv;
     } else {
+        //将line打散成token
         return sdssplitargs(line,argc);
     }
 }
@@ -1869,6 +1874,7 @@ void cliSetPreferences(char **argv, int argc, int interactive) {
 }
 
 /* Load the ~/.redisclirc file if any. */
+//加载cli配置
 void cliLoadPreferences(void) {
     sds rcfile = getDotfilePath(REDIS_CLI_RCFILE_ENV,REDIS_CLI_RCFILE_DEFAULT);
     if (rcfile == NULL) return;
@@ -1909,6 +1915,7 @@ static void repl(void) {
 
     /* Only use history and load the rc file when stdin is a tty. */
     if (isatty(fileno(stdin))) {
+        //stdin为tty,记录redis命令历史文件
         historyfile = getDotfilePath(REDIS_CLI_HISTFILE_ENV,REDIS_CLI_HISTFILE_DEFAULT);
         //keep in-memory history always regardless if history file can be determined
         history = 1;
@@ -1919,6 +1926,7 @@ static void repl(void) {
     }
 
     cliRefreshPrompt();
+    //读取cli输入
     while((line = linenoise(context ? config.prompt : "not connected> ")) != NULL) {
         if (line[0] != '\0') {
             long repeat = 1;

@@ -906,6 +906,7 @@ int redisBufferWrite(redisContext *c, int *done) {
     if (c->err)
         return REDIS_ERR;
 
+    //有要发送的数据，通过write将其发送出去
     if (sdslen(c->obuf) > 0) {
         int nwritten = c->funcs->write(c);
         if (nwritten < 0) {
