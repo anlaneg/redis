@@ -182,6 +182,7 @@ static int connSocketRead(connection *conn, void *buf, size_t buf_len) {
     return ret;
 }
 
+//更新conn为已连接，并调用accept_handler
 static int connSocketAccept(connection *conn, ConnectionCallbackFunc accept_handler) {
     if (conn->state != CONN_STATE_ACCEPTING) return C_ERR;
     conn->state = CONN_STATE_CONNECTED;

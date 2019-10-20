@@ -473,6 +473,7 @@ void dictRelease(dict *d)
     zfree(d);
 }
 
+//dict通过hashtable来实现,执行hashtable查询
 dictEntry *dictFind(dict *d, const void *key)
 {
     dictEntry *he;
