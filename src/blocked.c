@@ -31,9 +31,6 @@
  *
  * API:
  *
- * getTimeoutFromObjectOrReply() is just an utility function to parse a
- * timeout argument since blocking operations usually require a timeout.
- *
  * blockClient() set the CLIENT_BLOCKED flag in the client, and set the
  * specified block type 'btype' filed to one of BLOCKED_* macros.
  *
@@ -67,42 +64,6 @@
 
 int serveClientBlockedOnList(client *receiver, robj *key, robj *dstkey, redisDb *db, robj *value, int where);
 
-/* Get a timeout value from an object and store it into 'timeout'.
- * The final timeout is always stored as milliseconds as a time where the
- * timeout will expire, however the parsing is performed according to
- * the 'unit' that can be seconds or milliseconds.
- *
- * Note that if the timeout is zero (usually from the point of view of
- * commands API this means no timeout) the value stored into 'timeout'
- * is zero. */
-int getTimeoutFromObjectOrReply(client *c, robj *object, mstime_t *timeout, int unit) {
-    long long tval;
-    long double ftval;
-
-    if (unit == UNIT_SECONDS) {
-        if (getLongDoubleFromObjectOrReply(c,object,&ftval,
-            "timeout is not an float or out of range") != C_OK)
-            return C_ERR;
-        tval = (long long) (ftval * 1000.0);
-    } else {
-        if (getLongLongFromObjectOrReply(c,object,&tval,
-            "timeout is not an integer or out of range") != C_OK)
-            return C_ERR;
-    }
-
-    if (tval < 0) {
-        addReplyError(c,"timeout is negative");
-        return C_ERR;
-    }
-
-    if (tval > 0) {
-        tval += mstime();
-    }
-    *timeout = tval;
-
-    return C_OK;
-}
-
 /* Block a client for the specific operation type. Once the CLIENT_BLOCKED
  * flag is set client query buffer is not longer processed, but accumulated,
  * and will be processed when the client is unblocked. */
@@ -111,6 +72,7 @@ void blockClient(client *c, int btype) {
     c->btype = btype;
     server.blocked_clients++;
     server.blocked_clients_by_type[btype]++;
+    addClientToTimeoutTable(c);
 }
 
 /* This function is called in the beforeSleep() function of the event loop
@@ -174,6 +136,7 @@ void unblockClient(client *c) {
     } else if (c->btype == BLOCKED_WAIT) {
         unblockClientWaitingReplicas(c);
     } else if (c->btype == BLOCKED_MODULE) {
+        if (moduleClientIsBlockedOnKeys(c)) unblockClientWaitingData(c);
         unblockClientFromModule(c);
     } else {
         serverPanic("Unknown btype in unblockClient().");
@@ -184,6 +147,7 @@ void unblockClient(client *c) {
     server.blocked_clients_by_type[c->btype]--;
     c->flags &= ~CLIENT_BLOCKED;
     c->btype = BLOCKED_NONE;
+    removeClientFromTimeoutTable(c);
     queueClientForReprocessing(c);
 }
 
@@ -387,7 +351,7 @@ void serveClientsBlockedOnStreamKey(robj *o, readyList *rl) {
 
             if (streamCompareID(&s->last_id, gt) > 0) {
                 streamID start = *gt;
-                start.seq++; /* Can't overflow, it's an uint64_t */
+                streamIncrID(&start);
 
                 /* Lookup the consumer for the group, if any. */
                 streamConsumer *consumer = NULL;
@@ -426,6 +390,49 @@ void serveClientsBlockedOnStreamKey(robj *o, readyList *rl) {
                  * this call. */
                 unblockClient(receiver);
             }
+        }
+    }
+}
+
+/* Helper function for handleClientsBlockedOnKeys(). This function is called
+ * in order to check if we can serve clients blocked by modules using
+ * RM_BlockClientOnKeys(), when the corresponding key was signaled as ready:
+ * our goal here is to call the RedisModuleBlockedClient reply() callback to
+ * see if the key is really able to serve the client, and in that case,
+ * unblock it. */
+void serveClientsBlockedOnKeyByModule(readyList *rl) {
+    dictEntry *de;
+
+    /* We serve clients in the same order they blocked for
+     * this key, from the first blocked to the last. */
+    de = dictFind(rl->db->blocking_keys,rl->key);
+    if (de) {
+        list *clients = dictGetVal(de);
+        int numclients = listLength(clients);
+
+        while(numclients--) {
+            listNode *clientnode = listFirst(clients);
+            client *receiver = clientnode->value;
+
+            /* Put at the tail, so that at the next call
+             * we'll not run into it again: clients here may not be
+             * ready to be served, so they'll remain in the list
+             * sometimes. We want also be able to skip clients that are
+             * not blocked for the MODULE type safely. */
+            listDelNode(clients,clientnode);
+            listAddNodeTail(clients,receiver);
+
+            if (receiver->btype != BLOCKED_MODULE) continue;
+
+            /* Note that if *this* client cannot be served by this key,
+             * it does not mean that another client that is next into the
+             * list cannot be served as well: they may be blocked by
+             * different modules with different triggers to consider if a key
+             * is ready or not. This means we can't exit the loop but need
+             * to continue after the first failure. */
+            if (!moduleTryServeClientBlockedOnKey(receiver, rl->key)) continue;
+
+            moduleUnblockClient(receiver);
         }
     }
 }
@@ -470,6 +477,16 @@ void handleClientsBlockedOnKeys(void) {
              * we can safely call signalKeyAsReady() against this key. */
             dictDelete(rl->db->ready_keys,rl->key);
 
+            /* Even if we are not inside call(), increment the call depth
+             * in order to make sure that keys are expired against a fixed
+             * reference time, and not against the wallclock time. This
+             * way we can lookup an object multiple times (BRPOPLPUSH does
+             * that) without the risk of it being freed in the second
+             * lookup, invalidating the first one.
+             * See https://github.com/antirez/redis/pull/6554. */
+            server.fixed_time_expire++;
+            updateCachedTime(0);
+
             /* Serve clients blocked on list key. */
             robj *o = lookupKeyWrite(rl->db,rl->key);
 
@@ -480,7 +497,12 @@ void handleClientsBlockedOnKeys(void) {
                     serveClientsBlockedOnSortedSetKey(o,rl);
                 else if (o->type == OBJ_STREAM)
                     serveClientsBlockedOnStreamKey(o,rl);
+                /* We want to serve clients blocked on module keys
+                 * regardless of the object type: we don't know what the
+                 * module is trying to accomplish right now. */
+                serveClientsBlockedOnKeyByModule(rl);
             }
+            server.fixed_time_expire--;
 
             /* Free this item. */
             decrRefCount(rl->key);

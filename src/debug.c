@@ -355,6 +355,7 @@ void debugCommand(client *c) {
 "CRASH-AND-RECOVER <milliseconds> -- Hard crash and restart after <milliseconds> delay.",
 "DIGEST -- Output a hex signature representing the current DB content.",
 "DIGEST-VALUE <key-1> ... <key-N>-- Output a hex signature of the values of all the specified keys.",
+"DEBUG PROTOCOL [string|integer|double|bignum|null|array|set|map|attrib|push|verbatim|true|false]",
 "ERROR <string> -- Return a Redis protocol error with <string> as message. Useful for clients unit tests to simulate Redis errors.",
 "LOG <message> -- write message to the server log.",
 "HTSTATS <dbid> -- Return hash table statistics of the specified Redis database.",
@@ -362,6 +363,7 @@ void debugCommand(client *c) {
 "LOADAOF -- Flush the AOF buffers on disk and reload the AOF in memory.",
 "LUA-ALWAYS-REPLICATE-COMMANDS <0|1> -- Setting it to 1 makes Lua replication defaulting to replicating single commands, without the script having to enable effects replication.",
 "OBJECT <key> -- Show low level info about key and associated value.",
+"OOM -- Crash the server simulating an out-of-memory error.",
 "PANIC -- Crash the server simulating a panic.",
 "POPULATE <count> [prefix] [size] -- Create <count> string keys named key:<num>. If a prefix is specified is used instead of the 'key' prefix.",
 "RELOAD -- Save the RDB on disk and reload it back in memory.",
@@ -417,7 +419,7 @@ NULL
         }
         emptyDb(-1,EMPTYDB_NO_FLAGS,NULL);
         protectClient(c);
-        int ret = rdbLoad(server.rdb_filename,NULL);
+        int ret = rdbLoad(server.rdb_filename,NULL,RDBFLAGS_NONE);
         unprotectClient(c);
         if (ret != C_OK) {
             addReplyError(c,"Error trying to load the RDB dump");
@@ -488,7 +490,7 @@ NULL
             "encoding:%s serializedlength:%zu "
             "lru:%d lru_seconds_idle:%llu%s",
             (void*)val, val->refcount,
-            strenc, rdbSavedObjectLen(val),
+            strenc, rdbSavedObjectLen(val, c->argv[2]),
             val->lru, estimateObjectIdleTime(val)/1000, extra);
     } else if (!strcasecmp(c->argv[1]->ptr,"sdslen") && c->argc == 3) {
         dictEntry *de;
@@ -586,7 +588,7 @@ NULL
         }
     } else if (!strcasecmp(c->argv[1]->ptr,"protocol") && c->argc == 3) {
         /* DEBUG PROTOCOL [string|integer|double|bignum|null|array|set|map|
-         *                 attrib|push|verbatim|true|false|state|err|bloberr] */
+         *                 attrib|push|verbatim|true|false] */
         char *name = c->argv[2]->ptr;
         if (!strcasecmp(name,"string")) {
             addReplyBulkCString(c,"Hello World");
@@ -634,7 +636,7 @@ NULL
         } else if (!strcasecmp(name,"verbatim")) {
             addReplyVerbatim(c,"This is a verbatim\nstring",25,"txt");
         } else {
-            addReplyError(c,"Wrong protocol type name. Please use one of the following: string|integer|double|bignum|null|array|set|map|attrib|push|verbatim|true|false|state|err|bloberr");
+            addReplyError(c,"Wrong protocol type name. Please use one of the following: string|integer|double|bignum|null|array|set|map|attrib|push|verbatim|true|false");
         }
     } else if (!strcasecmp(c->argv[1]->ptr,"sleep") && c->argc == 3) {
         double dtime = strtod(c->argv[2]->ptr,NULL);
@@ -683,9 +685,12 @@ NULL
         sds stats = sdsempty();
         char buf[4096];
 
-        if (getLongFromObjectOrReply(c, c->argv[2], &dbid, NULL) != C_OK)
+        if (getLongFromObjectOrReply(c, c->argv[2], &dbid, NULL) != C_OK) {
+            sdsfree(stats);
             return;
+        }
         if (dbid < 0 || dbid >= server.dbnum) {
+            sdsfree(stats);
             addReplyError(c,"Out of range database");
             return;
         }
@@ -812,6 +817,8 @@ void serverLogObjectDebugInfo(const robj *o) {
         serverLog(LL_WARNING,"Sorted set size: %d", (int) zsetLength(o));
         if (o->encoding == OBJ_ENCODING_SKIPLIST)
             serverLog(LL_WARNING,"Skiplist level: %d", (int) ((const zset*)o->ptr)->zsl->level);
+    } else if (o->type == OBJ_STREAM) {
+        serverLog(LL_WARNING,"Stream size: %d", (int) streamLength(o));
     }
 }
 
@@ -1040,6 +1047,61 @@ void logRegisters(ucontext_t *uc) {
         (unsigned long) uc->uc_mcontext.gregs[18]
     );
     logStackContent((void**)uc->uc_mcontext.gregs[15]);
+    #elif defined(__aarch64__) /* Linux AArch64 */
+    serverLog(LL_WARNING,
+	      "\n"
+	      "X18:%016lx X19:%016lx\nX20:%016lx X21:%016lx\n"
+	      "X22:%016lx X23:%016lx\nX24:%016lx X25:%016lx\n"
+	      "X26:%016lx X27:%016lx\nX28:%016lx X29:%016lx\n"
+	      "X30:%016lx\n"
+	      "pc:%016lx sp:%016lx\npstate:%016lx fault_address:%016lx\n",
+	      (unsigned long) uc->uc_mcontext.regs[18],
+	      (unsigned long) uc->uc_mcontext.regs[19],
+	      (unsigned long) uc->uc_mcontext.regs[20],
+	      (unsigned long) uc->uc_mcontext.regs[21],
+	      (unsigned long) uc->uc_mcontext.regs[22],
+	      (unsigned long) uc->uc_mcontext.regs[23],
+	      (unsigned long) uc->uc_mcontext.regs[24],
+	      (unsigned long) uc->uc_mcontext.regs[25],
+	      (unsigned long) uc->uc_mcontext.regs[26],
+	      (unsigned long) uc->uc_mcontext.regs[27],
+	      (unsigned long) uc->uc_mcontext.regs[28],
+	      (unsigned long) uc->uc_mcontext.regs[29],
+	      (unsigned long) uc->uc_mcontext.regs[30],
+	      (unsigned long) uc->uc_mcontext.pc,
+	      (unsigned long) uc->uc_mcontext.sp,
+	      (unsigned long) uc->uc_mcontext.pstate,
+	      (unsigned long) uc->uc_mcontext.fault_address
+		      );
+	      logStackContent((void**)uc->uc_mcontext.sp);
+    #elif defined(__arm__) /* Linux ARM */
+    serverLog(LL_WARNING,
+	      "\n"
+	      "R10:%016lx R9 :%016lx\nR8 :%016lx R7 :%016lx\n"
+	      "R6 :%016lx R5 :%016lx\nR4 :%016lx R3 :%016lx\n"
+	      "R2 :%016lx R1 :%016lx\nR0 :%016lx EC :%016lx\n"
+	      "fp: %016lx ip:%016lx\n",
+	      "pc:%016lx sp:%016lx\ncpsr:%016lx fault_address:%016lx\n",
+	      (unsigned long) uc->uc_mcontext.arm_r10,
+	      (unsigned long) uc->uc_mcontext.arm_r9,
+	      (unsigned long) uc->uc_mcontext.arm_r8,
+	      (unsigned long) uc->uc_mcontext.arm_r7,
+	      (unsigned long) uc->uc_mcontext.arm_r6,
+	      (unsigned long) uc->uc_mcontext.arm_r5,
+	      (unsigned long) uc->uc_mcontext.arm_r4,
+	      (unsigned long) uc->uc_mcontext.arm_r3,
+	      (unsigned long) uc->uc_mcontext.arm_r2,
+	      (unsigned long) uc->uc_mcontext.arm_r1,
+	      (unsigned long) uc->uc_mcontext.arm_r0,
+	      (unsigned long) uc->uc_mcontext.error_code,
+	      (unsigned long) uc->uc_mcontext.arm_fp,
+	      (unsigned long) uc->uc_mcontext.arm_ip,
+	      (unsigned long) uc->uc_mcontext.arm_pc,
+	      (unsigned long) uc->uc_mcontext.arm_sp,
+	      (unsigned long) uc->uc_mcontext.arm_cpsr,
+	      (unsigned long) uc->uc_mcontext.fault_address
+		      );
+	      logStackContent((void**)uc->uc_mcontext.arm_sp);
     #endif
 #elif defined(__FreeBSD__)
     #if defined(__x86_64__)
@@ -1180,33 +1242,6 @@ void logRegisters(ucontext_t *uc) {
         (unsigned long) uc->uc_mcontext.mc_cs
     );
     logStackContent((void**)uc->uc_mcontext.mc_rsp);
-#elif defined(__aarch64__) /* Linux AArch64 */
-    serverLog(LL_WARNING,
-	      "\n"
-	      "X18:%016lx X19:%016lx\nX20:%016lx X21:%016lx\n"
-	      "X22:%016lx X23:%016lx\nX24:%016lx X25:%016lx\n"
-	      "X26:%016lx X27:%016lx\nX28:%016lx X29:%016lx\n"
-	      "X30:%016lx\n"
-	      "pc:%016lx sp:%016lx\npstate:%016lx fault_address:%016lx\n",
-	      (unsigned long) uc->uc_mcontext.regs[18],
-	      (unsigned long) uc->uc_mcontext.regs[19],
-	      (unsigned long) uc->uc_mcontext.regs[20],
-	      (unsigned long) uc->uc_mcontext.regs[21],
-	      (unsigned long) uc->uc_mcontext.regs[22],
-	      (unsigned long) uc->uc_mcontext.regs[23],
-	      (unsigned long) uc->uc_mcontext.regs[24],
-	      (unsigned long) uc->uc_mcontext.regs[25],
-	      (unsigned long) uc->uc_mcontext.regs[26],
-	      (unsigned long) uc->uc_mcontext.regs[27],
-	      (unsigned long) uc->uc_mcontext.regs[28],
-	      (unsigned long) uc->uc_mcontext.regs[29],
-	      (unsigned long) uc->uc_mcontext.regs[30],
-	      (unsigned long) uc->uc_mcontext.pc,
-	      (unsigned long) uc->uc_mcontext.sp,
-	      (unsigned long) uc->uc_mcontext.pstate,
-	      (unsigned long) uc->uc_mcontext.fault_address
-		      );
-	      logStackContent((void**)uc->uc_mcontext.sp);
 #else
     serverLog(LL_WARNING,
         "  Dumping of registers not supported for this OS/arch");
