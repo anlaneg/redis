@@ -45,20 +45,22 @@
 #define DICT_NOTUSED(V) ((void) V)
 
 typedef struct dictEntry {
-    void *key;
+    void *key;/*key指针*/
     union {
         void *val;
         uint64_t u64;
         int64_t s64;
         double d;
-    } v;
-    struct dictEntry *next;
+    } v;/*映射的值*/
+    struct dictEntry *next;/*串连下一个元素*/
 } dictEntry;
 
 typedef struct dictType {
+	/*计算hashcode*/
     uint64_t (*hashFunction)(const void *key);
     void *(*keyDup)(void *privdata, const void *key);
     void *(*valDup)(void *privdata, const void *obj);
+    /*hash key比对函数*/
     int (*keyCompare)(void *privdata, const void *key1, const void *key2);
     void (*keyDestructor)(void *privdata, void *key);
     void (*valDestructor)(void *privdata, void *obj);
@@ -67,16 +69,22 @@ typedef struct dictType {
 /* This is our hash table structure. Every dictionary has two of this as we
  * implement incremental rehashing, for the old to the new table. */
 typedef struct dictht {
+	/*hash桶*/
     dictEntry **table;
     unsigned long size;
+    /*hash表size mask*/
     unsigned long sizemask;
+    /*当前hashtable元素数*/
     unsigned long used;
 } dictht;
 
 typedef struct dict {
     dictType *type;
+    /*type函数对应的私有结构*/
     void *privdata;
+    /*指出有哪些hashtable*/
     dictht ht[2];
+    /*此值不为-1时，正在执行rehash*/
     long rehashidx; /* rehashing not in progress if rehashidx == -1 */
     unsigned long iterators; /* number of iterators currently running */
 } dict;
@@ -86,10 +94,10 @@ typedef struct dict {
  * iterating. Otherwise it is a non safe iterator, and only dictNext()
  * should be called while iterating. */
 typedef struct dictIterator {
-    dict *d;
-    long index;
-    int table, safe;
-    dictEntry *entry, *nextEntry;
+    dict *d;/*要遍历的dict*/
+    long index;/*当前待访问的桶索引*/
+    int table/*当前访问的table id*/, safe;
+    dictEntry *entry/*当前元素*/, *nextEntry/*下一个元素*/;
     /* unsafe iterator fingerprint for misuse detection. */
     long long fingerprint;
 } dictIterator;
@@ -125,6 +133,7 @@ typedef void (dictScanBucketFunction)(void *privdata, dictEntry **bucketref);
     if ((d)->type->keyDestructor) \
         (d)->type->keyDestructor((d)->privdata, (entry)->key)
 
+/*dup key,设置key值*/
 #define dictSetKey(d, entry, _key_) do { \
     if ((d)->type->keyDup) \
         (entry)->key = (d)->type->keyDup((d)->privdata, _key_); \
@@ -132,11 +141,13 @@ typedef void (dictScanBucketFunction)(void *privdata, dictEntry **bucketref);
         (entry)->key = (_key_); \
 } while(0)
 
+/*调用key比较函数（有函数采用func比对，无函数采用值比对）*/
 #define dictCompareKeys(d, key1, key2) \
     (((d)->type->keyCompare) ? \
         (d)->type->keyCompare((d)->privdata, key1, key2) : \
         (key1) == (key2))
 
+/*调用hash函数*/
 #define dictHashKey(d, key) (d)->type->hashFunction(key)
 #define dictGetKey(he) ((he)->key)
 #define dictGetVal(he) ((he)->v.val)
@@ -145,6 +156,7 @@ typedef void (dictScanBucketFunction)(void *privdata, dictEntry **bucketref);
 #define dictGetDoubleVal(he) ((he)->v.d)
 #define dictSlots(d) ((d)->ht[0].size+(d)->ht[1].size)
 #define dictSize(d) ((d)->ht[0].used+(d)->ht[1].used)
+/*检查d是否当前正在rehash*/
 #define dictIsRehashing(d) ((d)->rehashidx != -1)
 
 /* API */

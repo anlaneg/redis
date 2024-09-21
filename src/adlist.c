@@ -42,6 +42,7 @@ list *listCreate(void)
 {
     struct list *list;
 
+    /*创建list*/
     if ((list = zmalloc(sizeof(*list))) == NULL)
         return NULL;
     list->head = list->tail = NULL;
@@ -55,14 +56,17 @@ list *listCreate(void)
 /* Remove all the elements from the list without destroying the list itself. */
 void listEmpty(list *list)
 {
+	/*清空list*/
     unsigned long len;
     listNode *current, *next;
 
     current = list->head;
     len = list->len;
     while(len--) {
+    		/*释放每个元素*/
         next = current->next;
         if (list->free) list->free(current->value);
+        /*释放listnode*/
         zfree(current);
         current = next;
     }
@@ -75,6 +79,7 @@ void listEmpty(list *list)
  * This function can't fail. */
 void listRelease(list *list)
 {
+	/*释放list*/
     listEmpty(list);
     zfree(list);
 }
@@ -87,6 +92,7 @@ void listRelease(list *list)
  * On success the 'list' pointer you pass to the function is returned. */
 list *listAddNodeHead(list *list, void *value)
 {
+	/*申请node,填充value，并将此添加到list->head中*/
     listNode *node;
 
     if ((node = zmalloc(sizeof(*node))) == NULL)
@@ -113,6 +119,7 @@ list *listAddNodeHead(list *list, void *value)
  * On success the 'list' pointer you pass to the function is returned. */
 list *listAddNodeTail(list *list, void *value)
 {
+	/*申请node,填充value，并将此添加到list->tail中*/
     listNode *node;
 
     if ((node = zmalloc(sizeof(*node))) == NULL)
@@ -131,7 +138,7 @@ list *listAddNodeTail(list *list, void *value)
     return list;
 }
 
-list *listInsertNode(list *list, listNode *old_node, void *value, int after) {
+list *listInsertNode(list *list, listNode *old_node/*基准node*/, void *value/*node的值*/, int after/*添加到old_node前，还是后*/) {
     listNode *node;
 
     if ((node = zmalloc(sizeof(*node))) == NULL)
@@ -166,6 +173,7 @@ list *listInsertNode(list *list, listNode *old_node, void *value, int after) {
  * This function can't fail. */
 void listDelNode(list *list, listNode *node)
 {
+	/*自list中删除并释放node*/
     if (node->prev)
         node->prev->next = node->next;
     else
@@ -187,27 +195,34 @@ listIter *listGetIterator(list *list, int direction)
 {
     listIter *iter;
 
+    /*iter申请*/
     if ((iter = zmalloc(sizeof(*iter))) == NULL) return NULL;
     if (direction == AL_START_HEAD)
+    		/*iter指向head*/
         iter->next = list->head;
     else
+    	/*iter指向tail*/
         iter->next = list->tail;
+    /*指明方向*/
     iter->direction = direction;
     return iter;
 }
 
 /* Release the iterator memory */
 void listReleaseIterator(listIter *iter) {
+	/*iter释放*/
     zfree(iter);
 }
 
 /* Create an iterator in the list private iterator structure */
 void listRewind(list *list, listIter *li) {
+	/*初始化head iter*/
     li->next = list->head;
     li->direction = AL_START_HEAD;
 }
 
 void listRewindTail(list *list, listIter *li) {
+	/*初始化tail iter*/
     li->next = list->tail;
     li->direction = AL_START_TAIL;
 }
@@ -228,9 +243,11 @@ void listRewindTail(list *list, listIter *li) {
  * */
 listNode *listNext(listIter *iter)
 {
+	/*取下一个node*/
     listNode *current = iter->next;
 
     if (current != NULL) {
+    		/*按方向，走next/prev*/
         if (iter->direction == AL_START_HEAD)
             iter->next = current->next;
         else
@@ -249,6 +266,7 @@ listNode *listNext(listIter *iter)
  * The original list both on success or error is never modified. */
 list *listDup(list *orig)
 {
+	/*list复制*/
     list *copy;
     listIter iter;
     listNode *node;
@@ -289,6 +307,7 @@ list *listDup(list *orig)
  * NULL is returned. */
 listNode *listSearchKey(list *list, void *key)
 {
+	/*在list中查询key对应的node*/
     listIter iter;
     listNode *node;
 
@@ -314,7 +333,7 @@ listNode *listSearchKey(list *list, void *key)
  * and so on. If the index is out of range NULL is returned. */
 listNode *listIndex(list *list, long index) {
     listNode *n;
-
+    /*找第index号node*/
     if (index < 0) {
         index = (-index)-1;
         n = list->tail;
@@ -345,6 +364,7 @@ void listRotate(list *list) {
 /* Add all the elements of the list 'o' at the end of the
  * list 'l'. The list 'other' remains empty but otherwise valid. */
 void listJoin(list *l, list *o) {
+	/*两个list合并*/
     if (o->head)
         o->head->prev = l->tail;
 

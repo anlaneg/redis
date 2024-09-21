@@ -167,12 +167,15 @@ int getGenericCommand(client *c) {
     robj *o;
 
     if ((o = lookupKeyReadOrReply(c,c->argv[1],shared.null[c->resp])) == NULL)
+    		/*没有查询到，执行了reply*/
         return C_OK;
 
     if (o->type != OBJ_STRING) {
+    		/*查询到o，但type不为string类型*/
         addReply(c,shared.wrongtypeerr);
         return C_ERR;
     } else {
+    		/*执行响应*/
         addReplyBulk(c,o);
         return C_OK;
     }

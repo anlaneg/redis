@@ -36,7 +36,7 @@
 typedef struct listNode {
     struct listNode *prev;
     struct listNode *next;
-    void *value;
+    void *value;/*list nodeä¿å­çvalue*/
 } listNode;
 
 typedef struct listIter {
@@ -45,26 +45,39 @@ typedef struct listIter {
 } listIter;
 
 typedef struct list {
+	/*æåé¦ä¸ªåç´ */
     listNode *head;
     listNode *tail;
+    /*å¤å¶*/
     void *(*dup)(void *ptr);
+    /*listnodeåç´ éæ¾*/
     void (*free)(void *ptr);
     int (*match)(void *ptr, void *key);
+    /*listé¿åº¦*/
     unsigned long len;
 } list;
 
 /* Functions implemented as macros */
 #define listLength(l) ((l)->len)
+/*é¦ä¸ªåç´ */
 #define listFirst(l) ((l)->head)
+/*æåä¸ä¸ªåç´ */
 #define listLast(l) ((l)->tail)
+/*åä¸ä¸ªåç´ */
 #define listPrevNode(n) ((n)->prev)
+/*åä¸ä¸ªåç´ */
 #define listNextNode(n) ((n)->next)
+/*åæ­¤nodeå¯¹åºçvalue*/
 #define listNodeValue(n) ((n)->value)
 
+/*è®¾ç½®dupå½æ°*/
 #define listSetDupMethod(l,m) ((l)->dup = (m))
+/*è®¾ç½®freå½æ°*/
 #define listSetFreeMethod(l,m) ((l)->free = (m))
+/*è®¾ç½®matchå½æ°*/
 #define listSetMatchMethod(l,m) ((l)->match = (m))
 
+/*ådupå½æ°*/
 #define listGetDupMethod(l) ((l)->dup)
 #define listGetFreeMethod(l) ((l)->free)
 #define listGetMatchMethod(l) ((l)->match)

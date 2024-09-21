@@ -758,6 +758,7 @@ NULL
 
 /* =========================== Crash handling  ============================== */
 
+/*显示文件及行号*/
 void _serverAssert(const char *estr, const char *file, int line) {
     bugReportStart();
     serverLog(LL_WARNING,"=== ASSERTION FAILED ===");
@@ -771,10 +772,12 @@ void _serverAssert(const char *estr, const char *file, int line) {
     *((char*)-1) = 'x';
 }
 
+/*assert 失败输出信息显示*/
 void _serverAssertPrintClientInfo(const client *c) {
     int j;
     char conninfo[CONN_INFO_LEN];
 
+    /*显示bug日志头信息*/
     bugReportStart();
     serverLog(LL_WARNING,"=== ASSERTION FAILED CLIENT CONTEXT ===");
     serverLog(LL_WARNING,"client->flags = %llu", (unsigned long long) c->flags);
@@ -796,6 +799,7 @@ void _serverAssertPrintClientInfo(const client *c) {
     }
 }
 
+/*robj debug信息输出*/
 void serverLogObjectDebugInfo(const robj *o) {
     serverLog(LL_WARNING,"Object type: %d", o->type);
     serverLog(LL_WARNING,"Object encoding: %d", o->encoding);
@@ -828,6 +832,7 @@ void _serverAssertPrintObject(const robj *o) {
     serverLogObjectDebugInfo(o);
 }
 
+/*assert信息显示*/
 void _serverAssertWithInfo(const client *c, const robj *o, const char *estr, const char *file, int line) {
     if (c) _serverAssertPrintClientInfo(c);
     if (o) _serverAssertPrintObject(o);
@@ -854,6 +859,7 @@ void _serverPanic(const char *file, int line, const char *msg, ...) {
 
 void bugReportStart(void) {
     if (server.bug_report_start == 0) {
+    		/*格式化输出*/
         serverLogRaw(LL_WARNING|LL_RAW,
         "\n\n=== REDIS BUG REPORT START: Cut & paste starting from here ===\n");
         server.bug_report_start = 1;

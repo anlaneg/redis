@@ -537,7 +537,7 @@ loaderr:
  * Both filename and options can be NULL, in such a case are considered
  * empty. This way loadServerConfig can be used to just load a file or
  * just load a string. */
-void loadServerConfig(char *filename, char *options) {
+void loadServerConfig(char *filename/*配置文件*/, char *options) {
     sds config = sdsempty();
     char buf[CONFIG_MAX_LINE+1];
 
@@ -546,16 +546,21 @@ void loadServerConfig(char *filename, char *options) {
         FILE *fp;
 
         if (filename[0] == '-' && filename[1] == '\0') {
+        		/*自标准输入读取*/
             fp = stdin;
         } else {
+        		/*自文件读取*/
             if ((fp = fopen(filename,"r")) == NULL) {
                 serverLog(LL_WARNING,
                     "Fatal error, can't open config file '%s'", filename);
                 exit(1);
             }
         }
+
+        /*读取配置内容，存储在config中*/
         while(fgets(buf,CONFIG_MAX_LINE+1,fp) != NULL)
             config = sdscat(config,buf);
+        /*关闭文件*/
         if (fp != stdin) fclose(fp);
     }
     /* Append the additional options */
@@ -563,6 +568,7 @@ void loadServerConfig(char *filename, char *options) {
         config = sdscat(config,"\n");
         config = sdscat(config,options);
     }
+    /*加载配置文件*/
     loadServerConfigFromString(config);
     sdsfree(config);
 }

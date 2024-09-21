@@ -172,6 +172,7 @@ sds ACLHashPassword(unsigned char *cleartext, size_t len) {
 /* Given the category name the command returns the corresponding flag, or
  * zero if there is no match. */
 uint64_t ACLGetCommandCategoryFlagByName(const char *name) {
+	/*在ACLCommandCategories中查询对应name，并返回flag*/
     for (int j = 0; ACLCommandCategories[j].flag != 0; j++) {
         if (!strcasecmp(name,ACLCommandCategories[j].name)) {
             return ACLCommandCategories[j].flag;

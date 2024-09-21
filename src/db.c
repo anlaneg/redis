@@ -53,8 +53,10 @@ void updateLFU(robj *val) {
  * implementations that should instead rely on lookupKeyRead(),
  * lookupKeyWrite() and lookupKeyReadWithFlags(). */
 robj *lookupKey(redisDb *db, robj *key, int flags) {
+	/*在dict中查找key*/
     dictEntry *de = dictFind(db->dict,key->ptr);
     if (de) {
+    		/*取de对应的value*/
         robj *val = dictGetVal(de);
 
         /* Update the access time for the ageing algorithm.
@@ -162,7 +164,8 @@ robj *lookupKeyWrite(redisDb *db, robj *key) {
 
 robj *lookupKeyReadOrReply(client *c, robj *key, robj *reply) {
     robj *o = lookupKeyRead(c->db, key);
-    if (!o) addReply(c,reply);
+    if (!o) addReply(c,reply);/*查询失败，执行reply*/
+    /*返回查询到的obj*/
     return o;
 }
 
@@ -900,6 +903,7 @@ void lastsaveCommand(client *c) {
     addReplyLongLong(c,server.lastsave);
 }
 
+/*获取object类型名称*/
 char* getObjectTypeName(robj *o) {
     char* type;
     if (o == NULL) {
@@ -1193,7 +1197,7 @@ long long getExpire(redisDb *db, robj *key) {
 
     /* No expire? return ASAP */
     if (dictSize(db->expires) == 0 ||
-       (de = dictFind(db->expires,key->ptr)) == NULL) return -1;
+       (de = dictFind(db->expires,key->ptr)) == NULL) /*没有查找到de,返回-1*/return -1;
 
     /* The entry was found in the expire dict, this means it should also
      * be present in the main dict (safety check). */

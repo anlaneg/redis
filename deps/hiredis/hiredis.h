@@ -159,7 +159,7 @@ typedef struct {
      * the type of connection to use. This also indicates which
      * `endpoint` member field to use
      */
-    int type;
+    int type;/*连接方式*/
     /* bit field of REDIS_OPT_xxx */
     int options;
     /* timeout value. if NULL, no timeout is used */
@@ -168,8 +168,8 @@ typedef struct {
         /** use this field for tcp/ip connections */
         struct {
             const char *source_addr;
-            const char *ip;
-            int port;
+            const char *ip;/*目标地址*/
+            int port;/*目标端口*/
         } tcp;
         /** use this field for unix domain sockets */
         const char *unix_socket;

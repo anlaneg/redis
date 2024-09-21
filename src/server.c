@@ -1024,24 +1024,29 @@ void serverLogRaw(int level, const char *msg) {
     const char *c = ".-*#";
     FILE *fp;
     char buf[64];
+    /*是否按raw格式输出*/
     int rawmode = (level & LL_RAW);
+    /*log文件如果为空，则输出到stdout*/
     int log_to_stdout = server.logfile[0] == '\0';
 
+    /*level级别不足，不输出*/
     level &= 0xff; /* clear flags */
     if (level < server.verbosity) return;
 
+    /*打开文件失败，退出*/
     fp = log_to_stdout ? stdout : fopen(server.logfile,"a");
     if (!fp) return;
 
     if (rawmode) {
+    		/*raw格式，则直接输出*/
         fprintf(fp,"%s",msg);
     } else {
         int off;
         struct timeval tv;
         int role_char;
-        pid_t pid = getpid();
+        pid_t pid = getpid();/*进程id*/
 
-        gettimeofday(&tv,NULL);
+        gettimeofday(&tv,NULL);/*当前时间*/
         struct tm tm;
         nolocks_localtime(&tm,tv.tv_sec,server.timezone,server.daylight_active);
         off = strftime(buf,sizeof(buf),"%d %b %Y %H:%M:%S.",&tm);
@@ -1053,12 +1058,16 @@ void serverLogRaw(int level, const char *msg) {
         } else {
             role_char = (server.masterhost ? 'S':'M'); /* Slave or Master. */
         }
+
+        /*格式化输出*/
         fprintf(fp,"%d:%c %s %c %s\n",
             (int)getpid(),role_char, buf,c[level],msg);
     }
     fflush(fp);
 
+    /*log不输出到stdout，则关闭fp*/
     if (!log_to_stdout) fclose(fp);
+    /*如开启syslog,输出到syslog*/
     if (server.syslog_enabled) syslog(syslogLevelMap[level], "%s", msg);
 }
 
@@ -1439,6 +1448,7 @@ void tryResizeHashTables(int dbid) {
 int incrementallyRehash(int dbid) {
     /* Keys dictionary */
     if (dictIsRehashing(server.db[dbid].dict)) {
+    		/*执行1ms的rehash*/
         dictRehashMilliseconds(server.db[dbid].dict,1);
         return 1; /* already used our millisecond for this loop... */
     }
@@ -2351,6 +2361,7 @@ void initServerConfig(void) {
      * redis.conf using the rename-command directive. */
     server.commands = dictCreate(&commandTableDictType,NULL);
     server.orig_commands = dictCreate(&commandTableDictType,NULL);
+    /*填充cmd*/
     populateCommandTable();
     server.delCommand = lookupCommandByCString("del");
     server.multiCommand = lookupCommandByCString("multi");
@@ -2896,6 +2907,7 @@ int populateCommandTableParseFlags(struct redisCommand *c, char *strflags) {
     for (int j = 0; j < argc; j++) {
         char *flag = argv[j];
         if (!strcasecmp(flag,"write")) {
+        		/*write设置标记*/
             c->flags |= CMD_WRITE|CMD_CATEGORY_WRITE;
         } else if (!strcasecmp(flag,"read-only")) {
             c->flags |= CMD_READONLY|CMD_CATEGORY_READ;
@@ -2931,6 +2943,7 @@ int populateCommandTableParseFlags(struct redisCommand *c, char *strflags) {
             if (flag[0] == '@' &&
                 (catflag = ACLGetCommandCategoryFlagByName(flag+1)) != 0)
             {
+            		/*添加上，针对@指定的category对应的flags*/
                 c->flags |= catflag;
             } else {
                 sdsfreesplitres(argv,argc);
@@ -2951,19 +2964,24 @@ void populateCommandTable(void) {
     int j;
     int numcommands = sizeof(redisCommandTable)/sizeof(struct redisCommand);
 
+    /*遍历所有command*/
     for (j = 0; j < numcommands; j++) {
+    		/*当前待处理的command*/
         struct redisCommand *c = redisCommandTable+j;
         int retval1, retval2;
 
         /* Translate the command string flags description into an actual
          * set of flags. */
+        /*针对sflags生成flags*/
         if (populateCommandTableParseFlags(c,c->sflags) == C_ERR)
             serverPanic("Unsupported command flag");
 
         c->id = ACLGetCommandID(c->name); /* Assign the ID used for ACL. */
+        /*将cmd添加进server.commands中*/
         retval1 = dictAdd(server.commands, sdsnew(c->name), c);
         /* Populate an additional dictionary that will be unaffected
          * by rename-command statements in redis.conf. */
+        /*将cmd添加进server.orig_commands中*/
         retval2 = dictAdd(server.orig_commands, sdsnew(c->name), c);
         serverAssert(retval1 == DICT_OK && retval2 == DICT_OK);
     }
@@ -2974,6 +2992,7 @@ void resetCommandTableStats(void) {
     dictEntry *de;
     dictIterator *di;
 
+    /*遍历server.commands*/
     di = dictGetSafeIterator(server.commands);
     while((de = dictNext(di)) != NULL) {
         c = (struct redisCommand *) dictGetVal(de);
@@ -3347,7 +3366,7 @@ int processCommand(client *c) {
     /* Now lookup the command and check ASAP about trivial error conditions
      * such as wrong arity, bad command name and so forth. */
     //查询发送过来的cmd
-    c->cmd = c->lastcmd = lookupCommand(c->argv[0]->ptr);
+    c->cmd = c->lastcmd = lookupCommand(c->argv[0]->ptr/*查询的命令*/);
     if (!c->cmd) {
         //未找到对应的命令
         flagTransaction(c);
@@ -4884,6 +4903,7 @@ int iAmMaster(void) {
 }
 
 
+/*redis server入口*/
 int main(int argc, char **argv) {
     struct timeval tv;
     int j;
@@ -5019,6 +5039,7 @@ int main(int argc, char **argv) {
             exit(1);
         }
         resetServerSaveParams();
+        /*加载服务配置*/
         loadServerConfig(configfile,options);
         sdsfree(options);
     }

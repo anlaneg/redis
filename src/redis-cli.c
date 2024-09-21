@@ -190,8 +190,11 @@ static void createClusterManagerCommand(char *cmdname, int argc, char **argv);
 
 static redisContext *context;
 static struct config {
+	/*主机ip地址*/
     char *hostip;
+    /*port信息*/
     int hostport;
+    /*使用unix socket方式连接，指明socket地址*/
     char *hostsocket;
     int tls;
     char *sni;
@@ -199,8 +202,11 @@ static struct config {
     char *cacertdir;
     char *cert;
     char *key;
+    /*-r 选项，标明指行指定命令的次数，默认一次*/
     long repeat;
+    /*与-r配合使用，指明执行指定命令的间隔*/
     long interval;
+    /*-n选项指明的db编号*/
     int dbnum;
     int interactive;
     int shutdown;
@@ -227,10 +233,14 @@ static struct config {
     int memkeys;
     unsigned memkeys_samples;
     int hotkeys;
+    /*-x选项设置，标记自stdin中读取参数*/
     int stdinarg; /* get last arg from stdin. (-x option) */
+    /*密码*/
     char *auth;
     int askpass;
+    /*用户名*/
     char *user;
+    /*输出模式*/
     int output; /* output mode, see OUTPUT_* defines */
     sds mb_delim;
     char prompt[128];
@@ -242,6 +252,7 @@ static struct config {
     int last_cmd_type;
     int verbose;
     clusterManagerCommand cluster_manager_command;
+    /*使用密码时不显示警告信息*/
     int no_auth_warning;
     int resp3;
 } config;
@@ -295,6 +306,7 @@ static void cliRefreshPrompt(void) {
 
     /* Add [dbnum] if needed */
     if (config.dbnum != 0)
+    		/*显示dbnum*/
         prompt = sdscatfmt(prompt,"[%i]",config.dbnum);
 
     /* Copy the prompt in the static buffer. */
@@ -381,6 +393,7 @@ static sds percentDecode(const char *pe, size_t len) {
  *  [1]: https://www.iana.org/assignments/uri-schemes/prov/redis */
 static void parseRedisUri(const char *uri) {
 
+	/*通过redisuri获取配置信息*/
     const char *scheme = "redis://";
     const char *curr = uri;
     const char *end = uri + strlen(uri);
@@ -388,14 +401,18 @@ static void parseRedisUri(const char *uri) {
 
     /* URI must start with a valid scheme. */
     if (strncasecmp(scheme, curr, strlen(scheme))) {
+    		/*uri必须以scheme指定的格式开头*/
         fprintf(stderr,"Invalid URI scheme\n");
         exit(1);
     }
+
+    /*跳过scheme,如为空串，则直接退出*/
     curr += strlen(scheme);
     if (curr == end) return;
 
     /* Extract user info. */
     if ((userinfo = strchr(curr,'@'))) {
+    		/*提取密码信息*/
         if ((username = strchr(curr, ':')) && username < userinfo) {
             /* If provided, username is ignored. */
             curr = username + 1;
@@ -409,6 +426,7 @@ static void parseRedisUri(const char *uri) {
     /* Extract host and port. */
     path = strchr(curr, '/');
     if (*curr != '/') {
+    		/*分析hostip,hostport信息*/
         host = path ? path - 1 : end;
         if ((port = strchr(curr, ':'))) {
             config.hostport = atoi(port + 1);
@@ -493,14 +511,19 @@ static sds cliVersion(void) {
 }
 
 static void cliInitHelp(void) {
+	/*cmd长度*/
     int commandslen = sizeof(commandHelp)/sizeof(struct commandHelp);
+    /*group长度*/
     int groupslen = sizeof(commandGroups)/sizeof(char*);
     int i, len, pos = 0;
     helpEntry tmp;
 
+    /*帮助实体长度*/
     helpEntriesLen = len = commandslen+groupslen;
+    /*申请helpEntries*/
     helpEntries = zmalloc(sizeof(helpEntry)*len);
 
+    /*遍历commandGrops*/
     for (i = 0; i < groupslen; i++) {
         tmp.argc = 1;
         tmp.argv = zmalloc(sizeof(sds));
@@ -511,6 +534,7 @@ static void cliInitHelp(void) {
         helpEntries[pos++] = tmp;
     }
 
+    /*遍历commandHelp,填充helpEntries*/
     for (i = 0; i < commandslen; i++) {
         tmp.argv = sdssplitargs(commandHelp[i].name,&tmp.argc);
         tmp.full = sdsnew(commandHelp[i].name);
@@ -528,6 +552,7 @@ static void cliInitHelp(void) {
 static void cliIntegrateHelp(void) {
     if (cliConnect(CC_QUIET) == REDIS_ERR) return;
 
+    /*执行command*/
     redisReply *reply = redisCommand(context, "COMMAND");
     if(reply == NULL || reply->type != REDIS_REPLY_ARRAY) return;
 
@@ -743,15 +768,20 @@ static void freeHintsCallback(void *ptr) {
 /* Send AUTH command to the server */
 static int cliAuth(void) {
     redisReply *reply;
+    /*无授权，则直接近回*/
     if (config.auth == NULL) return REDIS_OK;
 
     if (config.user == NULL)
+    		/*无用户名，则直接提交密码给对端*/
         reply = redisCommand(context,"AUTH %s",config.auth);
     else
+    		/*执行auth 用户名密码*/
         reply = redisCommand(context,"AUTH %s %s",config.user,config.auth);
     if (reply != NULL) {
         if (reply->type == REDIS_REPLY_ERROR)
+        		/*认证失败*/
             fprintf(stderr,"Warning: AUTH failed\n");
+        /*认证成功*/
         freeReplyObject(reply);
         return REDIS_OK;
     }
@@ -763,6 +793,7 @@ static int cliSelect(void) {
     redisReply *reply;
     if (config.dbnum == 0) return REDIS_OK;
 
+    /*选择指定db*/
     reply = redisCommand(context,"SELECT %d",config.dbnum);
     if (reply != NULL) {
         int result = REDIS_OK;
@@ -841,6 +872,7 @@ error:
 /* Select RESP3 mode if redis-cli was started with the -3 option.  */
 static int cliSwitchProto(void) {
     redisReply *reply;
+    /*没有使用resp3协议，退出*/
     if (config.resp3 == 0) return REDIS_OK;
 
     reply = redisCommand(context,"HELLO 3");
@@ -864,8 +896,10 @@ static int cliConnect(int flags) {
         }
 
         if (config.hostsocket == NULL) {
+        		/*通过tcp连接*/
             context = redisConnect(config.hostip,config.hostport);
         } else {
+        		/*通过unix socket连接*/
             context = redisConnectUnix(config.hostsocket);
         }
 
@@ -904,6 +938,8 @@ static int cliConnect(int flags) {
         /* Do AUTH, select the right DB, switch to RESP3 if needed. */
         if (cliAuth() != REDIS_OK)
             return REDIS_ERR;
+
+        /*选择db*/
         if (cliSelect() != REDIS_OK)
             return REDIS_ERR;
         if (cliSwitchProto() != REDIS_OK)
@@ -1272,6 +1308,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
 
     if (!config.eval_ldb && /* In debugging mode, let's pass "help" to Redis. */
         (!strcasecmp(command,"help") || !strcasecmp(command,"?"))) {
+    		/*遇到help命令*/
         cliOutputHelp(--argc, ++argv);
         return REDIS_OK;
     }
@@ -1337,6 +1374,7 @@ static int cliSendCommand(int argc, char **argv, long repeat) {
 
     /* Negative repeat is allowed and causes infinite loop,
        works well with the interval option. */
+    /*按repeat次数进行执行*/
     while(repeat < 0 || repeat-- > 0) {
         redisAppendCommandArgv(context,argc,(const char**)argv,argvlen);
         while (config.monitor_mode) {
@@ -1435,24 +1473,33 @@ static int parseOptions(int argc, char **argv) {
     int i;
 
     for (i = 1; i < argc; i++) {
+    		/*是否为最后一个选项*/
         int lastarg = i==argc-1;
 
         if (!strcmp(argv[i],"-h") && !lastarg) {
+        		/*遇到-h选项，设置hostip*/
             sdsfree(config.hostip);
             config.hostip = sdsnew(argv[++i]);
         } else if (!strcmp(argv[i],"-h") && lastarg) {
+        		/*遇到-h选项，且为最后一个选项，认为--help*/
             usage();
         } else if (!strcmp(argv[i],"--help")) {
+        		/*遇到--help*/
             usage();
         } else if (!strcmp(argv[i],"-x")) {
+        		/*遇到-x选项，标记自stdin中读取参数*/
             config.stdinarg = 1;
         } else if (!strcmp(argv[i],"-p") && !lastarg) {
+        		/*遇到-p选项，设置hostport*/
             config.hostport = atoi(argv[++i]);
         } else if (!strcmp(argv[i],"-s") && !lastarg) {
+        		/*遇到-s选项，设置unix socket path*/
             config.hostsocket = argv[++i];
         } else if (!strcmp(argv[i],"-r") && !lastarg) {
+        		/*遇到-r选项，标记指行指定命令N次*/
             config.repeat = strtoll(argv[++i],NULL,10);
         } else if (!strcmp(argv[i],"-i") && !lastarg) {
+        		/*与-r配合使用，指明执行指定命令的间隔*/
             double seconds = atof(argv[++i]);
             config.interval = seconds*1000000;
         } else if (!strcmp(argv[i],"-n") && !lastarg) {
@@ -1464,16 +1511,22 @@ static int parseOptions(int argc, char **argv) {
         } else if ((!strcmp(argv[i],"-a") || !strcmp(argv[i],"--pass"))
                    && !lastarg)
         {
+        		/*密码信息*/
             config.auth = argv[++i];
         } else if (!strcmp(argv[i],"--user") && !lastarg) {
+        		/*用户名*/
             config.user = argv[++i];
         } else if (!strcmp(argv[i],"-u") && !lastarg) {
+        		/*解析redis uri*/
             parseRedisUri(argv[++i]);
         } else if (!strcmp(argv[i],"--raw")) {
+        		/*raw格式输出*/
             config.output = OUTPUT_RAW;
         } else if (!strcmp(argv[i],"--no-raw")) {
+        		/*标准格式输出*/
             config.output = OUTPUT_STANDARD;
         } else if (!strcmp(argv[i],"--csv")) {
+        		/*csv格式输出*/
             config.output = OUTPUT_CSV;
         } else if (!strcmp(argv[i],"--latency")) {
             config.latency_mode = 1;
@@ -1618,6 +1671,7 @@ static int parseOptions(int argc, char **argv) {
             config.key = argv[++i];
 #endif
         } else if (!strcmp(argv[i],"-v") || !strcmp(argv[i], "--version")) {
+        		/*遇到-v参数，显示版本后退出*/
             sds version = cliVersion();
             printf("redis-cli %s\n", version);
             sdsfree(version);
@@ -1665,6 +1719,7 @@ static void parseEnv() {
     /* Set auth from env, but do not overwrite CLI arguments if passed */
     char *auth = getenv(REDIS_CLI_AUTH_ENV);
     if (auth != NULL && config.auth == NULL) {
+    		/*自环境变量中获得密码*/
         config.auth = auth;
     }
 }
@@ -1686,12 +1741,15 @@ static sds readArgFromStdin(void) {
     return arg;
 }
 
+/*redis client用法介绍*/
 static void usage(void) {
     sds version = cliVersion();
     fprintf(stderr,
+/*显示版本号*/
 "redis-cli %s\n"
 "\n"
 "Usage: redis-cli [OPTIONS] [cmd [arg [arg ...]]]\n"
+/*显示选项*/
 "  -h <hostname>      Server hostname (default: 127.0.0.1).\n"
 "  -p <port>          Server port (default: 6379).\n"
 "  -s <socket>        Server socket (overrides hostname and port).\n"
@@ -1945,12 +2003,14 @@ static void repl(void) {
             int skipargs = 0;
             char *endptr = NULL;
 
+            /*line打散成argv*/
             argv = cliSplitArgs(line,&argc);
 
             /* check if we have a repeat command option and
              * need to skip the first arg */
             if (argv && argc > 0) {
                 errno = 0;
+                /*解析repeat次数*/
                 repeat = strtol(argv[0], &endptr, 10);
                 if (argc > 1 && *endptr == '\0') {
                     if (errno == ERANGE || errno == EINVAL || repeat <= 0) {
@@ -1991,6 +2051,7 @@ static void repl(void) {
                 if (strcasecmp(argv[0],"quit") == 0 ||
                     strcasecmp(argv[0],"exit") == 0)
                 {
+                		/*执行进程退出*/
                     exit(0);
                 } else if (argv[0][0] == ':') {
                     cliSetPreferences(argv,argc,1);
@@ -2008,12 +2069,14 @@ static void repl(void) {
                         printf("Use 'restart' only in Lua debugging mode.");
                     }
                 } else if (argc == 3 && !strcasecmp(argv[0],"connect")) {
+                		/*执行连接*/
                     sdsfree(config.hostip);
                     config.hostip = sdsnew(argv[1]);
                     config.hostport = atoi(argv[2]);
                     cliRefreshPrompt();
                     cliConnect(CC_FORCE);
                 } else if (argc == 1 && !strcasecmp(argv[0],"clear")) {
+                		/*清除screen*/
                     linenoiseClearScreen();
                 } else {
                     long long start_time = mstime(), elapsed;
@@ -7892,6 +7955,7 @@ static sds askPassword() {
 int main(int argc, char **argv) {
     int firstarg;
 
+    /*初始化config*/
     config.hostip = sdsnew("127.0.0.1");
     config.hostport = 6379;
     config.hostsocket = NULL;
@@ -7957,10 +8021,12 @@ int main(int argc, char **argv) {
         config.output = OUTPUT_STANDARD;
     config.mb_delim = sdsnew("\n");
 
+    /*解析选项*/
     firstarg = parseOptions(argc,argv);
     argc -= firstarg;
     argv += firstarg;
 
+    /*解析环境变量*/
     parseEnv();
 
     if (config.askpass) {

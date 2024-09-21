@@ -768,6 +768,7 @@ void AddReplyFromClient(client *dst, client *src) {
         return;
     addReplyProto(dst,src->buf, src->bufpos);
     if (listLength(src->reply))
+    		/*dst,src两个list合并*/
         listJoin(dst->reply,src->reply);
     dst->reply_bytes += src->reply_bytes;
     src->reply_bytes = 0;
